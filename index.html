@@ -553,23 +553,11 @@ async function prosesLogin(e) {
     });
 
     try {
-        // ── Panggil GAS Web App untuk pengesahan sebenar ──
-        // GAS Web App akan semak spreadsheet / database emel rasmi
-        const url = new URL(CFG.GAS_AUTH_URL);
-        url.searchParams.set('action', 'authenticate');
-        // Hash emel sebelum hantar (privasi tambahan)
-        url.searchParams.set('token', await hashEmel(emel));
-        url.searchParams.set('ts', Date.now()); // Cache-busting
-
-        const resp = await fetch(url.toString(), {
-            method: 'GET',
-            headers: { 'Accept': 'application/json' },
-            signal: AbortSignal.timeout(10_000) // 10 saat timeout
-        });
-
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-
-        const data = await resp.json();
+        // ── Panggil GAS Web App menggunakan JSONP ──
+        // GAS tidak sokong CORS biasa dari domain luar (GitHub Pages).
+        // JSONP adalah cara paling serasi untuk panggil GAS dari luar domain.
+        const token = await hashEmel(emel);
+        const data  = await panggilGAS(token);
 
         if (data && data.status === 'OK' && data.authorised === true) {
             // ── Berjaya ──
@@ -585,14 +573,6 @@ async function prosesLogin(e) {
 
     } catch (err) {
         console.warn('[Portal] Auth request gagal:', err.message);
-
-        // ── FALLBACK: jika GAS URL belum dikonfigurasi, gunakan mod demo ──
-        // PADAMKAN blok ini apabila GAS URL sebenar sudah dikonfigurasi
-        if (CFG.GAS_AUTH_URL.includes('GANTIKAN_DENGAN_ID')) {
-            modDemo(emel);
-            return;
-        }
-
         Swal.fire({
             icon: 'error', title: 'Ralat Sambungan',
             text: 'Tidak dapat menghubungi pelayan pengesahan. Cuba sebentar lagi.',
@@ -602,11 +582,43 @@ async function prosesLogin(e) {
     }
 }
 
-// ── Mod Demo (padam bila GAS URL sudah siap) ──
+// ══════════════════════════════════════════════════════════════════════
+// JSONP — cara selamat panggil GAS dari GitHub Pages (tanpa CORS error)
+// ══════════════════════════════════════════════════════════════════════
+function panggilGAS(token) {
+    return new Promise((resolve, reject) => {
+        const cbName = 'gasCallback_' + Date.now();
+        const script = document.createElement('script');
+        const timer  = setTimeout(() => {
+            cleanup();
+            reject(new Error('Timeout — GAS tidak menjawab dalam 15 saat'));
+        }, 15000);
+
+        function cleanup() {
+            clearTimeout(timer);
+            delete window[cbName];
+            if (script.parentNode) script.parentNode.removeChild(script);
+        }
+
+        window[cbName] = function(data) {
+            cleanup();
+            resolve(data);
+        };
+
+        const url = CFG.GAS_AUTH_URL
+            + '?action=authenticate'
+            + '&token=' + encodeURIComponent(token)
+            + '&callback=' + cbName
+            + '&ts=' + Date.now();
+
+        script.src = url;
+        script.onerror = () => { cleanup(); reject(new Error('Skrip GAS gagal dimuatkan')); };
+        document.head.appendChild(script);
+    });
+}
+
+// (modDemo dikekalkan sebagai rujukan sahaja — tidak digunakan lagi)
 function modDemo(emel) {
-    // Senarai ini TIDAK terdedah dalam client yang sebenar
-    // kerana ia akan berpindah ke GAS spreadsheet
-    // Ini HANYA untuk tujuan pembangunan / demo
     Swal.close();
     Swal.fire({
         icon: 'info', title: '⚠ MOD DEMO AKTIF',
